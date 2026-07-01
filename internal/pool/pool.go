@@ -12,70 +12,43 @@ import (
 )
 
 type Pool struct {
-	cfg     config.Config
-	jobs    chan job.Job
-	retry   chan job.Job
-	results chan result.Result
-	dlq     *deadletter.Queue
-
-	workerWg sync.WaitGroup // tracks worker goroutines (for clean exit)
-	jobWg    sync.WaitGroup // tracks in-flight jobs (for knowing when done)
-
-	ctx    context.Context
-	cancel context.CancelFunc
+	cfg      config.Config
+	jobs     chan job.Job
+	results  chan result.Result
+	dlq      *deadletter.Queue
+	workerWg sync.WaitGroup
+	jobWg    sync.WaitGroup
+	stopOnce sync.Once
 }
 
 func New(cfg config.Config) *Pool {
 	return &Pool{
-		cfg:     cfg,
-		jobs:    make(chan job.Job, cfg.JobBufSize),
-		retry:   make(chan job.Job, cfg.JobBufSize),
+		cfg: cfg,
+		// buffer must be large enough for submitted jobs AND requeued retries.
+		// Use 2× JobBufSize so retries never block workers.
+		jobs:    make(chan job.Job, cfg.JobBufSize*2),
 		results: make(chan result.Result, cfg.ResBufSize),
 		dlq:     deadletter.New(),
 	}
 }
 
 func (p *Pool) Start(ctx context.Context) {
-	p.ctx, p.cancel = context.WithCancel(ctx)
-	dispatcher.Spawn(p.ctx, p.cfg.WorkerCount, p.jobs, p.retry, p.results, p.dlq, p.cfg.JobDelayMs, &p.workerWg, &p.jobWg)
+	dispatcher.Spawn(p.cfg.WorkerCount, p.jobs, p.results, p.dlq, p.cfg.JobDelayMs, &p.workerWg)
 
-	// retry pump: forwards retried jobs back into the main job queue.
-	// Note: jobWg.Done() was NOT called for a requeued job (worker.go
-	// must NOT call Done() on retry — only on final success/dead-letter),
-	// so the count stays accurate.
+	// context watcher: external cancel/timeout triggers Stop()
 	go func() {
-		for {
-			select {
-			case <-p.ctx.Done():
-				return
-			case j, ok := <-p.retry:
-				if !ok {
-					return
-				}
-				select {
-				case p.jobs <- j:
-				case <-p.ctx.Done():
-					return
-				}
-			}
-		}
-	}()
-
-	// closer: once every submitted job has fully resolved, shut down workers
-	// and close results. This runs exactly once, in its own goroutine, so
-	// Stop() just has to wait for it.
-	go func() {
-		p.jobWg.Wait()    // blocks until every job is fully resolved
-		p.cancel()        // tell worker + retry-pump select loops to exit
-		p.workerWg.Wait() // wait for worker goroutines to actually return
-		close(p.results)  // safe — guaranteed no more writers
+		<-ctx.Done()
+		p.Stop()
 	}()
 }
 
-// Submit adds a job to the queue. Must not be called after Stop() returns.
 func (p *Pool) Submit(j job.Job) {
 	p.jobWg.Add(1)
-	p.jobs <- j
+	// attach the done callback now, after jobWg.Add
+	j2 := job.New(j.ID, j.Payload, j.Task, j.MaxRetry, func() {
+		p.jobWg.Done()
+	})
+	p.jobs <- j2
 }
 
 func (p *Pool) Results() <-chan result.Result {
@@ -86,8 +59,12 @@ func (p *Pool) DeadLetters() []job.Job {
 	return p.dlq.All()
 }
 
-// Stop blocks until all submitted jobs are resolved and the pool has
-// fully shut down. Safe to call once after all Submit calls are done.
+// Stop waits for all jobs to resolve, then shuts down workers cleanly.
 func (p *Pool) Stop() {
-	p.workerWg.Wait() // returns once the closer goroutine above has cancelled + drained workers
+	p.stopOnce.Do(func() {
+		p.jobWg.Wait()    // wait until every job calls Resolve()
+		close(p.jobs)     // workers see EOF, exit their range loop
+		p.workerWg.Wait() // wait for all goroutines to return
+		close(p.results)  // safe — no writers remain
+	})
 }

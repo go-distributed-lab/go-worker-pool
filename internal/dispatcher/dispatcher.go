@@ -1,7 +1,6 @@
 package dispatcher
 
 import (
-	"context"
 	"sync"
 
 	"go-worker-pool/internal/deadletter"
@@ -10,13 +9,13 @@ import (
 	"go-worker-pool/internal/worker"
 )
 
-func Spawn(ctx context.Context, count int, jobs <-chan job.Job, retry chan<- job.Job, results chan<- result.Result, dlq *deadletter.Queue, delayMs int, workerWg, jobWg *sync.WaitGroup) {
+func Spawn(count int, jobs chan job.Job, results chan<- result.Result, dlq *deadletter.Queue, delayMs int, workerWg *sync.WaitGroup) {
 	for i := range count {
-		w := worker.New(i, jobs, retry, results, dlq, delayMs, jobWg)
+		w := worker.New(i, jobs, results, dlq, delayMs)
 		workerWg.Add(1)
 		go func() {
 			defer workerWg.Done()
-			w.Start(ctx)
+			w.Start()
 		}()
 	}
 }

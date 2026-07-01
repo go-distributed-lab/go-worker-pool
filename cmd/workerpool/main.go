@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -15,11 +14,9 @@ import (
 
 func main() {
 	cfg := config.Load()
-
 	fmt.Printf("starting pool: workers=%d jobBuf=%d resBuf=%d\n\n",
 		cfg.WorkerCount, cfg.JobBufSize, cfg.ResBufSize)
 
-	// overall timeout — if jobs aren't done in time, pool cancels everything
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -33,15 +30,12 @@ func main() {
 			id := i
 			p.Submit(job.Job{
 				ID:       id,
-				Payload:  fmt.Sprintf("task-%d", id),
 				MaxRetry: 2,
 				Task: func() (any, error) {
 					duration := time.Duration(rand.Intn(150)+50) * time.Millisecond
 					time.Sleep(duration)
-
-					// simulate ~25% failure rate to exercise retry + DLQ
 					if rand.Intn(4) == 0 {
-						return nil, errors.New("simulated transient failure")
+						return nil, fmt.Errorf("transient failure")
 					}
 					return fmt.Sprintf("task-%d done in %v", id, duration), nil
 				},
@@ -50,9 +44,7 @@ func main() {
 		p.Stop()
 	}()
 
-	succeeded := 0
-	failed := 0
-
+	succeeded, failed := 0, 0
 	for r := range p.Results() {
 		if r.Err != nil {
 			log.Printf("[result] job=%-3d FAILED: %v", r.JobID, r.Err)
