@@ -1,0 +1,9 @@
+.git
+.github
+*.md
+benchmarks/
+tests/
+docs/
+scripts/
+*.prof
+*.test

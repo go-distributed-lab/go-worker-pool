@@ -1,0 +1,24 @@
+version: "3.9"
+
+services:
+  workerpool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: go-worker-pool:latest
+    container_name: go-worker-pool
+
+    environment:
+      WORKER_COUNT: 8
+      JOB_BUF_SIZE: 200
+      RES_BUF_SIZE: 200
+      JOB_DELAY_MS: 100   # slow jobs down so concurrency is visible in logs
+
+    # restart only on failure, not on clean exit
+    restart: on-failure
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
