@@ -78,7 +78,7 @@ jobs:
           cache: true
 
       - name: Run benchmarks
-        run: go test -bench=. -benchmem -benchtime=1s -v=false ./benchmarks/ | grep -E "^(Benchmark|ok|FAIL)" | tee benchmark-results.txt
+        run: go test -bench=. -benchmem -benchtime=3s ./benchmarks/ | tee benchmark-results.txt
 
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
@@ -110,8 +110,7 @@ jobs:
 
       - name: Verify image exists
         run: docker images go-worker-pool
-
- # ── Job 5: Security scan ──────────────────────────────────────────────────
+# ── Job 5: Security scan ──────────────────────────────────────────────────
   security:
     name: Security Scan
     runs-on: ubuntu-latest
